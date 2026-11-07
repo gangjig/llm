@@ -72,9 +72,26 @@ def _dump_extra_models(records):
     )
 
 
+# Header names whose values are credentials rather than plain configuration
+_CREDENTIAL_HEADER_NAMES = frozenset(
+    {
+        "api-key",
+        "authorization",
+        "cookie",
+        "proxy-authorization",
+        "x-access-token",
+        "x-api-key",
+        "x-auth-token",
+    }
+)
+
+
 def _write_extra_models(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_dump_extra_models(records), "utf-8")
+    # Records can contain credentials in their headers, so restrict the
+    # file to owner-only access, like keys.json
+    path.chmod(0o600)
 
 
 def _append_extra_model(path, record):
@@ -102,10 +119,12 @@ def _append_extra_model(path, record):
         if last_item is not sequence:
             text = ", " + text
         path.write_text(existing[:position] + text + existing[position:], "utf-8")
+        path.chmod(0o600)
         return
     if not existing.endswith("\n"):
         existing += "\n"
     path.write_text(existing + text, "utf-8")
+    path.chmod(0o600)
 
 
 def _load_extra_models_for_cli(path):
@@ -1030,6 +1049,19 @@ def register_commands(cli):
         else:
             _append_extra_model(path, record)
             click.echo(f"Saved {model_id} to {path}")
+        credential_headers = [
+            name for name, _ in headers if name.lower() in _CREDENTIAL_HEADER_NAMES
+        ]
+        if credential_headers:
+            click.echo(
+                "Warning: {} header{} stored in plaintext in {} - "
+                "the file is restricted to owner-only access (0600)".format(
+                    ", ".join(credential_headers),
+                    "s" if len(credential_headers) > 1 else "",
+                    path,
+                ),
+                err=True,
+            )
         click.echo(f"Run a prompt with: llm -m {model_id} 'Hello'")
 
     @endpoint_.command(name="list")

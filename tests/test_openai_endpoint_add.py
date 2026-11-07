@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 import yaml
@@ -351,6 +352,51 @@ def test_endpoint_add_after_removing_last_model_uses_block_style(user_path):
         "  model_name: second\n"
         "  api_base: http://localhost:8080\n"
     )
+
+
+@pytest.mark.xfail(sys.platform == "win32", reason="Expected to fail on Windows")
+def test_endpoint_add_restricts_file_permissions(user_path):
+    path = user_path / "extra-openai-models.yaml"
+    result = _invoke(
+        "add",
+        "http://localhost:8080",
+        "-m",
+        "model-one",
+        "-H",
+        "Authorization",
+        "Bearer secret",
+    )
+    assert result.exit_code == 0, result.output
+    # Header values can be credentials, so the file is owner-only,
+    # matching the treatment keys.json gets
+    assert oct(path.stat().mode)[-3:] == "600"
+    # Appending another model keeps the restricted permissions
+    result = _invoke("add", "http://localhost:8080", "-m", "model-two")
+    assert result.exit_code == 0, result.output
+    assert oct(path.stat().mode)[-3:] == "600"
+
+
+def test_endpoint_add_warns_for_credential_headers(user_path):
+    result = _invoke(
+        "add",
+        "http://localhost:8080",
+        "-m",
+        "model-one",
+        "-H",
+        "Authorization",
+        "Bearer secret",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Warning" in result.output
+    assert "plaintext" in result.output
+
+
+def test_endpoint_add_no_warning_for_regular_headers(user_path):
+    result = _invoke(
+        "add", "http://localhost:8080", "-m", "model-one", "-H", "X-Title", "LLM"
+    )
+    assert result.exit_code == 0, result.output
+    assert "Warning" not in result.output
 
 
 def test_endpoint_path(user_path):
