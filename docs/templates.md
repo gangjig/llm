@@ -91,7 +91,7 @@ The option can be repeated to combine templates. They are applied from left to r
 llm -t model-and-options -t summarize 'Text to summarize'
 ```
 
-Note that templates loaded via URLs will have any `functions:` keys ignored, to avoid accidentally executing arbitrary code. This restriction also applies to templates loaded via the {ref}`template loaders plugin mechanism <plugin-hooks-register-template-loaders>`.
+Note that templates loaded via URLs will have any `functions:` keys ignored, to avoid accidentally executing arbitrary code. Any `fragments:`, `system_fragments:` or `attachments:` entries in those templates that reference files on your local filesystem will also be ignored, to avoid accidentally reading arbitrary files. This restriction also applies to templates loaded via the {ref}`template loaders plugin mechanism <plugin-hooks-register-template-loaders>`.
 
 (prompt-templates-list)=
 

@@ -463,16 +463,69 @@ def _merge_template_options(template, options):
     return merged_options
 
 
+def _fragment_uses_local_file(db: sqlite_utils.Database, fragment: str) -> bool:
+    """
+    Return True if resolving this fragment string would read from stdin
+    or from a file on the local filesystem.
+    """
+    if fragment.startswith(("http://", "https://")):
+        return False
+    if fragment == "-":
+        return True
+    if has_plugin_prefix(fragment) and not pathlib.Path(fragment).exists():
+        # Fragment loader plugins are trusted once they are installed
+        return False
+    # Aliases and hashes resolve to fragments the user previously stored
+    stored = list(
+        db.query(
+            """
+            select 1 from fragments
+            left join fragment_aliases on fragments.id = fragment_aliases.fragment_id
+            where alias = :alias or hash = :alias limit 1
+            """,
+            {"alias": fragment},
+        )
+    )
+    if stored:
+        return False
+    return pathlib.Path(fragment).exists()
+
+
+def _merge_template_fragments(template, db, fragment_strings):
+    """
+    Return the fragments declared by a loaded template.
+
+    Untrusted templates - loaded from a URL or via a template loader
+    plugin - cannot use fragments that read local files, mirroring how
+    their functions: definitions are ignored.
+    """
+    if template._is_trusted:
+        return list(fragment_strings)
+    return [
+        fragment
+        for fragment in fragment_strings
+        if not _fragment_uses_local_file(db, fragment)
+    ]
+
+
+def _attachment_uses_local_file(value: str) -> bool:
+    """Return True if an attachment string refers to stdin or a local file."""
+    return "://" not in value
+
+
 def _merge_template_attachments(template, attachments, attachment_types):
     """Resolve and prepend attachments declared by a loaded template."""
     if template.attachments:
         attachments = [
-            resolve_attachment(value) for value in template.attachments
+            resolve_attachment(value)
+            for value in template.attachments
+            if template._is_trusted or not _attachment_uses_local_file(value)
         ] + list(attachments)
     if template.attachment_types:
         attachment_types = [
             resolve_attachment_with_type(item.value, item.type)
             for item in template.attachment_types
+            if template._is_trusted or not _attachment_uses_local_file(item.value)
         ] + list(attachment_types)
     return attachments, attachment_types
 
@@ -481,7 +534,7 @@ def _merge_template_tools(template, tools, python_tools):
     """Prepend trusted tool definitions declared by a loaded template."""
     if template.tools:
         tools = [*template.tools, *tools]
-    if template.functions and template._functions_is_trusted:
+    if template.functions and template._is_trusted:
         python_tools = [template.functions, *python_tools]
     return tools, python_tools
 
@@ -953,10 +1006,17 @@ def prompt(
         # Prepend list-valued fields in template order, ahead of CLI values
         for template_obj in reversed(template_objs):
             if template_obj.fragments:
-                fragments = [*template_obj.fragments, *fragments]
+                fragments = [
+                    *_merge_template_fragments(
+                        template_obj, db, template_obj.fragments
+                    ),
+                    *fragments,
+                ]
             if template_obj.system_fragments:
                 system_fragments = [
-                    *template_obj.system_fragments,
+                    *_merge_template_fragments(
+                        template_obj, db, template_obj.system_fragments
+                    ),
                     *system_fragments,
                 ]
             tools, python_tools = _merge_template_tools(
@@ -4416,8 +4476,8 @@ def load_template(name: str) -> Template:
         raise LoadTemplateError(f"Invalid template: {name}")
     content = path.read_text()
     template_obj = _parse_yaml_template(name, content)
-    # We trust functions here because they came from the filesystem
-    template_obj._functions_is_trusted = True
+    # We trust templates here because they came from the filesystem
+    template_obj._is_trusted = True
     return template_obj
 
 

@@ -36,8 +36,10 @@ class Template(BaseModel):
     def __init__(self, **data):
         super().__init__(**data)
         # Not a pydantic field to avoid YAML being able to set it
-        # this controls if Python inline functions code is trusted
-        self._functions_is_trusted = False
+        # this controls if the template is trusted: trusted templates may
+        # use Python inline functions and read local files through
+        # fragments, system_fragments and attachments
+        self._is_trusted = False
 
     def evaluate(
         self, input: str, params: dict[str, Any] | None = None

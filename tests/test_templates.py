@@ -606,3 +606,128 @@ def test_tools_in_templates(
     finally:
         after()
         pm.unregister(name="greetings-plugin")
+
+
+# Smallest valid 1x1 pixel PNG
+PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+@pytest.mark.parametrize(
+    "source,local_files_allowed",
+    (
+        ("alias", True),
+        ("file", True),
+        # Loaded from URL or plugin = local file access should be ignored
+        ("url", False),
+        ("plugin", False),
+    ),
+)
+def test_template_file_access_respects_trust(
+    source, local_files_allowed, httpx2_mock, tmpdir, monkeypatch
+):
+    monkeypatch.chdir(tmpdir)
+    (tmpdir / "secret.txt").write_text("fragment-secret", "utf-8")
+    (tmpdir / "system-secret.txt").write_text("system-fragment-secret", "utf-8")
+    pathlib.Path(tmpdir / "attach.png").write_bytes(PNG_BYTES)
+    (tmpdir / "stored.txt").write_text("stored-fragment-content", "utf-8")
+
+    runner = CliRunner()
+    # Store a fragment so the template can reference it by hash - stored
+    # fragments belong to the user and should work from any template
+    assert (
+        runner.invoke(cli, ["fragments", "set", "stored1", "stored.txt"]).exit_code == 0
+    )
+    stored = yaml.safe_load(runner.invoke(cli, ["fragments", "list"]).output)
+    stored_hash = stored[0]["hash"]
+
+    httpx2_mock.add_response(
+        url="https://example.com/frag.txt",
+        method="GET",
+        text="url-fragment-content",
+        status_code=200,
+        is_reusable=True,
+    )
+
+    fragment_refs = ["secret.txt", "https://example.com/frag.txt", stored_hash]
+    template_yaml = yaml.safe_dump(
+        {
+            "name": "test",
+            "fragments": fragment_refs,
+            "system_fragments": ["system-secret.txt"],
+            "attachments": ["attach.png"],
+        }
+    )
+    args = []
+
+    def before():
+        pass
+
+    def after():
+        pass
+
+    if source == "alias":
+        args = ["-t", "test"]
+        (user_dir() / "templates").mkdir(parents=True, exist_ok=True)
+        (user_dir() / "templates" / "test.yaml").write_text(template_yaml, "utf-8")
+    elif source == "file":
+        (tmpdir / "test.yaml").write_text(template_yaml, "utf-8")
+        args = ["-t", str(tmpdir / "test.yaml")]
+    elif source == "url":
+        httpx2_mock.add_response(
+            url="https://example.com/test.yaml",
+            method="GET",
+            text=template_yaml,
+            status_code=200,
+            is_reusable=True,
+        )
+        args = ["-t", "https://example.com/test.yaml"]
+    elif source == "plugin":
+
+        class LoadTemplatePlugin:
+            __name__ = "LoadTemplatePlugin"
+
+            @hookimpl
+            def register_template_loaders(self, register):
+                register(
+                    "file-access-template",
+                    lambda s: Template(
+                        name="file-access-template",
+                        fragments=fragment_refs,
+                        system_fragments=["system-secret.txt"],
+                        attachments=["attach.png"],
+                    ),
+                )
+
+        def before():
+            pm.register(LoadTemplatePlugin(), name="test-template-file-access")
+
+        def after():
+            pm.unregister(name="test-template-file-access")
+
+        args = ["-t", "file-access-template:"]
+
+    before()
+    try:
+        result = runner.invoke(
+            cli, args + ["-m", "echo", "hello"], catch_exceptions=False
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        # URL fragments and previously stored fragments work either way
+        assert "url-fragment-content" in data["prompt"]
+        assert "stored-fragment-content" in data["prompt"]
+        if local_files_allowed:
+            assert "fragment-secret" in data["prompt"]
+            assert "system-fragment-secret" in data["system"]
+            assert len(data["attachments"]) == 1
+            assert data["attachments"][0]["path"].endswith("attach.png")
+        else:
+            assert "fragment-secret" not in data["prompt"]
+            assert "system-fragment-secret" not in (data["system"] or "")
+            assert data["attachments"] == []
+    finally:
+        after()
