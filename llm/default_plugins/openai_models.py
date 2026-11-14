@@ -1450,6 +1450,7 @@ class _Shared:
         self.headers = headers
         self.can_stream = can_stream
         self.vision = vision
+        self.audio = audio
         self.allows_system_prompt = allows_system_prompt
 
         self.attachment_types = set()
@@ -2213,6 +2214,7 @@ class _SharedResponses(_Shared):
             "headers": self.headers,
             "can_stream": self.can_stream,
             "vision": self.vision,
+            "audio": self.audio,
             "reasoning": self._reasoning,
             "verbosity": self._verbosity,
             "image_detail_original": self._image_detail_original,

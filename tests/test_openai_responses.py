@@ -625,6 +625,38 @@ def test_chat_completions_opt_out_dispatches_to_chat(httpx2_mock):
     assert "reasoning_summary" not in request_body
 
 
+def test_delegate_chat_kwargs_preserves_audio():
+    """The -o chat_completions 1 delegate must mirror the Responses
+    model's audio setting, like vision already does. No behavior
+    difference is observable today - prompt-time attachment validation
+    runs on the Responses model, never on the delegate - so this pins
+    the delegate object's attachment types, the consistency property
+    itself."""
+    from llm.default_plugins.openai_models import (
+        AsyncChat,
+        AsyncResponses,
+        Chat,
+        Responses,
+    )
+
+    model = Responses("gpt-audio-test", audio=True, vision=True)
+    chat = Chat(**model._delegate_chat_kwargs())
+    assert chat.attachment_types == model.attachment_types
+    assert "audio/mpeg" in chat.attachment_types
+    assert "audio/wav" in chat.attachment_types
+
+    async_model = AsyncResponses("gpt-audio-test", audio=True)
+    async_chat = AsyncChat(**async_model._delegate_chat_kwargs())
+    assert async_chat.attachment_types == async_model.attachment_types
+    assert "audio/mpeg" in async_chat.attachment_types
+
+    # And the default stays off - audio must not leak in unasked
+    plain = Responses("gpt-plain-test", vision=True)
+    plain_chat = Chat(**plain._delegate_chat_kwargs())
+    assert "audio/mpeg" not in plain_chat.attachment_types
+    assert "audio/wav" not in plain_chat.attachment_types
+
+
 @pytest.mark.parametrize(
     "model_id", ("gpt-5.5", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-terra")
 )
